@@ -1,0 +1,2 @@
+"""Stress-regime slicing helpers."""
+

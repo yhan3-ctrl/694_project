@@ -1,0 +1,165 @@
+project:
+  name: financial_forecasting_stress_test
+  random_seed: 42
+
+data:
+  source: yahoo_finance
+  start_date: "2015-01-01"
+  end_date: "2025-12-31"
+  tickers:
+    - SPY
+    - QQQ
+    - AAPL
+    - MSFT
+    - AMZN
+    - GOOGL
+    - META
+    - NVDA
+    - TSLA
+    - JPM
+    - XOM
+    - JNJ
+
+features:
+  lookback_window: 60
+  return_windows: [1, 5, 10, 20]
+  rolling_windows: [5, 20, 60]
+  volatility_window: 20
+  feature_columns:
+    - open
+    - high
+    - low
+    - close
+    - adj_close
+    - volume
+    - log_return_1
+    - log_return_5
+    - log_return_10
+    - log_return_20
+    - rolling_mean_return_5
+    - rolling_std_return_5
+    - rolling_mean_volume_5
+    - rolling_mean_return_20
+    - rolling_std_return_20
+    - rolling_mean_volume_20
+    - rolling_mean_return_60
+    - rolling_std_return_60
+    - rolling_mean_volume_60
+    - volatility_20
+    - volume_log
+    - volume_change_1
+    - volume_ratio_20
+    - close_to_open
+    - high_to_low
+    - close_to_high
+    - close_to_low
+    - adj_close_ratio
+    - range_normalized
+
+splits:
+  single:
+    train_frac: 0.6
+    val_frac: 0.2
+    test_frac: 0.2
+  rolling:
+    train_days: 756
+    val_days: 252
+    test_days: 252
+    step_days: 252
+    num_splits: 3
+
+regimes:
+  volatility_window: 20
+  volatility_quantiles: [0.33, 0.66]
+  shock_top_fraction: 0.01
+  shock_window_radius: 5
+
+models:
+  enabled:
+    - arima
+    - lightgbm
+    - small_transformer
+    - frozen_llm
+  baselines_enabled:
+    - arima
+    - lightgbm
+  arima:
+    order: [1, 0, 0]
+  lightgbm:
+    n_estimators: 300
+    learning_rate: 0.05
+    num_leaves: 31
+    subsample: 0.9
+    colsample_bytree: 0.9
+    min_child_samples: 20
+    reg_alpha: 0.0
+    reg_lambda: 0.0
+    verbosity: -1
+  small_transformer:
+    lookback_window: 60
+    batch_size: 128
+    learning_rate: 0.001
+    num_epochs: 12
+    d_model: 64
+    dim_feedforward: 128
+    nhead: 4
+    num_layers: 2
+    dropout: 0.1
+    early_stopping_patience: 4
+    weight_decay: 0.0001
+  frozen_llm:
+    backbone_name: "distilgpt2"
+    trust_remote_code: false
+    lookback_window: 60
+    patch_size: 5
+    patch_padding: "left_zero"
+    hidden_size: null
+    projection_hidden_size: 128
+    regression_hidden_size: 128
+    batch_size: 16
+    learning_rate: 0.001
+    num_epochs: 4
+    early_stopping_patience: 2
+    weight_decay: 0.0001
+    dropout: 0.1
+    max_train_samples: null
+    max_val_samples: null
+    max_test_samples: null
+    device: "auto"
+    mixed_precision: false
+    smoke_test:
+      enabled: false
+      backbone_name: "sshleifer/tiny-gpt2"
+      tickers: ["SPY", "AAPL"]
+      split_ids: ["rolling_0"]
+      batch_size: 8
+      num_epochs: 2
+      max_train_samples: 256
+      max_val_samples: 128
+      max_test_samples: 128
+
+paths:
+  raw_prices: "data/raw/yahoo_ohlcv_raw.csv"
+  processed_prices: "data/processed/daily_ohlcv_processed.csv"
+  feature_dataset: "data/processed/model_features.csv"
+  dataset_summary: "outputs/tables/dataset_summary.csv"
+  split_summary: "outputs/tables/split_summary.csv"
+  split_indices: "outputs/datasets/split_indices.json"
+  metrics_split: "outputs/metrics/split_level_metrics.csv"
+  metrics_split_json: "outputs/metrics/split_level_metrics.json"
+  metrics_aggregated: "outputs/metrics/aggregated_metrics.csv"
+  metrics_aggregated_json: "outputs/metrics/aggregated_metrics.json"
+  baseline_costs: "outputs/tables/baseline_costs.csv"
+  transformer_costs: "outputs/tables/small_transformer_costs.csv"
+  model_cost_summary: "outputs/tables/model_cost_summary.csv"
+  transformer_history: "outputs/metrics/small_transformer_training_history.csv"
+  transformer_checkpoints_dir: "outputs/checkpoints/small_transformer"
+  main_results_table: "outputs/tables/main_results_with_transformer.csv"
+  mechanism_comparison_table: "outputs/tables/mechanism_comparison_initial.csv"
+  frozen_llm_costs: "outputs/tables/frozen_llm_costs.csv"
+  frozen_llm_history: "outputs/metrics/frozen_llm_training_history.csv"
+  frozen_llm_checkpoints_dir: "outputs/checkpoints/frozen_llm"
+  main_results_with_frozen_llm: "outputs/tables/main_results_with_frozen_llm.csv"
+  mechanism_comparison_pretraining: "outputs/tables/mechanism_comparison_pretraining.csv"
+  frozen_llm_run_context: "outputs/tables/frozen_llm_run_context.csv"
+  frozen_llm_full_run_summary: "outputs/tables/frozen_llm_full_run_summary.csv"
