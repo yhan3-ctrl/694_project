@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 import time
 from pathlib import Path
@@ -13,6 +14,8 @@ from transformers import AutoModelForCausalLM
 from src.models.base import BaseForecastModel
 from src.utils.io import ensure_parent
 from src.utils.runtime import get_peak_gpu_memory_mb, select_torch_device, set_global_seed
+
+LOGGER = logging.getLogger(__name__)
 
 
 class FrozenPatchLLMRegressor(BaseForecastModel):
@@ -64,6 +67,7 @@ class FrozenPatchLLMRegressor(BaseForecastModel):
         self.backbone.eval()
         for parameter in self.backbone.parameters():
             parameter.requires_grad = False
+        self.backbone_dtype = self._module_floating_dtype(self.backbone)
 
         backbone_hidden_size = hidden_size or getattr(self.backbone.config, "hidden_size", None)
         if backbone_hidden_size is None:
@@ -91,6 +95,7 @@ class FrozenPatchLLMRegressor(BaseForecastModel):
             nn.Dropout(dropout),
             nn.Linear(regression_hidden_size, 1),
         ).to(self.device)
+        self.trainable_dtype = self._module_floating_dtype(self.patch_projector)
 
         self.feature_mean_: torch.Tensor | None = None
         self.feature_std_: torch.Tensor | None = None
@@ -98,6 +103,23 @@ class FrozenPatchLLMRegressor(BaseForecastModel):
         self.training_time_seconds = 0.0
         self.inference_time_seconds = 0.0
         self.peak_gpu_memory_mb: float | None = None
+        self._dtype_debug_logged = False
+        LOGGER.info(
+            "Initialized frozen_llm with backbone dtype=%s, trainable dtype=%s, device=%s.",
+            self.backbone_dtype,
+            self.trainable_dtype,
+            self.device,
+        )
+
+    @staticmethod
+    def _module_floating_dtype(module: nn.Module) -> torch.dtype:
+        for parameter in module.parameters():
+            if parameter.is_floating_point():
+                return parameter.dtype
+        for buffer in module.buffers():
+            if buffer.is_floating_point():
+                return buffer.dtype
+        return torch.float32
 
     def _trainable_modules(self) -> list[nn.Module]:
         return [self.patch_projector, self.patch_position_embeddings, self.pooler, self.regression_head]
@@ -130,11 +152,21 @@ class FrozenPatchLLMRegressor(BaseForecastModel):
     def _forward(self, inputs: torch.Tensor) -> torch.Tensor:
         normalized = self._normalize_inputs(inputs)
         patch_tokens = self._extract_patches(normalized)
-        projected = self.patch_projector(patch_tokens)
+        projected = self.patch_projector(patch_tokens.to(self.trainable_dtype))
 
         positions = torch.arange(self.num_patches, device=inputs.device).unsqueeze(0)
         llm_inputs = projected + self.patch_position_embeddings(positions)
+        llm_inputs = llm_inputs.to(dtype=self.backbone_dtype)
         attention_mask = torch.ones(llm_inputs.shape[:2], dtype=torch.long, device=inputs.device)
+
+        if not self._dtype_debug_logged:
+            LOGGER.info(
+                "Frozen LLM dtype check: backbone=%s, projection_output=%s, inputs_embeds=%s.",
+                self.backbone_dtype,
+                projected.dtype,
+                llm_inputs.dtype,
+            )
+            self._dtype_debug_logged = True
 
         outputs = self.backbone(
             inputs_embeds=llm_inputs,
@@ -143,9 +175,11 @@ class FrozenPatchLLMRegressor(BaseForecastModel):
             return_dict=True,
             use_cache=False,
         )
-        last_hidden = outputs.hidden_states[-1][:, -1, :]
+        pooler_dtype = self._module_floating_dtype(self.pooler)
+        last_hidden = outputs.hidden_states[-1][:, -1, :].to(dtype=pooler_dtype)
         pooled = self.pooler(last_hidden)
-        return self.regression_head(pooled).squeeze(-1)
+        predictions = self.regression_head(pooled).squeeze(-1)
+        return predictions.to(dtype=torch.float32)
 
     def _optimizer(self) -> torch.optim.Optimizer:
         trainable_params: list[torch.nn.Parameter] = []
